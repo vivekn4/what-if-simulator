@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Crafted by Vivek Nair (VN) — original hourglass favicon -->
+  <rect x="10" y="5" width="44" height="9" rx="3" fill="#8f3f1f"/>
+  <rect x="10" y="50" width="44" height="9" rx="3" fill="#8f3f1f"/>
+  <rect x="28" y="14" width="8" height="36" fill="#c9a227" opacity="0.35"/>
+  <path d="M16 14 C16 30 27 33 27 44 L37 44 C37 33 48 30 48 14 Z" fill="#fffdf8" stroke="#c9a227" stroke-width="3"/>
+  <path d="M23 19 L41 19 L33.5 31 Z" fill="#e8c96a"/>
+  <path d="M27 44 L37 44 L34 52 L30 52 Z" fill="#c9a227"/>
+</svg>
