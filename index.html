@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>What If — Life Simulator</title>
+  <meta name="description" content="Type any life decision and watch the next 10 years unfold as an AI-written branching story.">
+  <meta name="author" content="Vivek Nair (VN)">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500;1,9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!-- Crafted by Vivek Nair (VN) — github.com/vivekn4 -->
+  <canvas id="vfx-canvas" aria-hidden="true"></canvas>
+  <header class="site-header">
+    <div class="wrap">
+      <span class="brand" aria-hidden="true">🔮</span>
+      <span class="brand-name">What If <em>· Life Simulator</em></span>
+      <button id="sfx-toggle" type="button" class="sfx-toggle-header" aria-label="Toggle sound effects" title="Toggle sound effects">🔊</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- ============ LANDING ============ -->
+    <section id="view-landing">
+      <div class="hero">
+        <h1>What if you had chosen <span class="accent">differently?</span></h1>
+        <p class="lede">
+          Type any life decision. The Chronicler — an AI storyteller — writes the next
+          ten years of your alternate history, year by year. Then rewrite any year
+          and see how else it could have gone.
+        </p>
+      </div>
+
+      <form id="generate-form" class="card" novalidate>
+        <label class="field-label" for="scenario-input">What if I …</label>
+        <textarea
+          id="scenario-input"
+          rows="3"
+          maxlength="300"
+          placeholder="quit my job to open a bakery…"
+          autocomplete="off"
+        ></textarea>
+
+        <div id="example-chips" class="chips" aria-label="Try an example">
+          <span class="chips-label">Try:</span>
+          <button type="button" data-scenario="quit my job to travel the world">quit my job to travel</button>
+          <button type="button" data-scenario="moved to Toronto">moved to Toronto</button>
+          <button type="button" data-scenario="learned game development">learned game development</button>
+        </div>
+
+        <div class="controls">
+          <label class="control">
+            <span>Timeframe</span>
+            <select id="years-select">
+              <option value="1">1 year</option>
+              <option value="5">5 years</option>
+              <option value="10" selected>10 years</option>
+            </select>
+          </label>
+          <label class="control">
+            <span>Tone</span>
+            <select id="tone-select">
+              <option value="realistic" selected>Realistic</option>
+              <option value="optimistic">Optimistic</option>
+              <option value="dark">Darkly comic</option>
+            </select>
+          </label>
+        </div>
+
+        <p id="form-error" class="error" hidden></p>
+
+        <button id="generate-btn" type="submit" class="btn-primary">
+          <span id="generate-btn-spinner" class="btn-spinner" hidden aria-hidden="true"></span>
+          <span id="generate-btn-label">Generate my timeline</span>
+        </button>
+        <p class="fineprint">A work of fiction, spun from your prompt. The future is unwritten.</p>
+      </form>
+
+      <section class="saved-section" aria-labelledby="saved-heading">
+        <h2 id="saved-heading">Saved timelines</h2>
+        <p id="saved-empty" class="muted">Nothing saved yet — your timelines will live here, in this browser.</p>
+        <ul id="saved-list" class="saved-list"></ul>
+      </section>
+    </section>
+
+    <!-- ============ TIMELINE ============ -->
+    <section id="view-timeline" hidden>
+      <div class="timeline-toolbar">
+        <div class="toolbar-title">
+          <h2 id="timeline-title"></h2>
+          <p id="timeline-subtitle" class="muted"></p>
+        </div>
+        <div class="toolbar-actions">
+          <button id="copy-btn" type="button" class="btn-ghost">Copy timeline</button>
+          <button id="save-btn" type="button" class="btn-ghost">Save timeline</button>
+          <button id="startover-btn" type="button" class="btn-ghost btn-danger">Start over</button>
+        </div>
+      </div>
+
+      <p id="timeline-error" class="error" hidden></p>
+
+      <div id="timeline-loading" class="loading" hidden aria-live="polite">
+        <div class="loading-orb" aria-hidden="true">🔮</div>
+        <p>The Chronicler is writing your alternate history…</p>
+        <p class="muted small">This can take up to a minute for a full decade.</p>
+      </div>
+
+      <div id="timeline" class="timeline"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p class="muted small">What If · Life Simulator — stories generated by AI, branching imagined by you. Designed &amp; built by <a href="https://github.com/vivekn4">VN</a>.</p>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
+
+  <script src="js/config.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

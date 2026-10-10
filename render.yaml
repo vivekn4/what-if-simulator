@@ -1,0 +1,24 @@
+# Deployed by Vivek Nair (VN)
+services:
+  - type: web
+    name: what-if-simulator
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      # REQUIRED — get a free key at https://aistudio.google.com/apikey
+      # and set it in the Render dashboard (never commit it).
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: AI_MODEL
+        value: gemini-3.8-flash
+      - key: AI_TEMPERATURE
+        value: "0.85"
+      - key: AI_MAX_TOKENS
+        value: "2000"
+      - key: NODE_VERSION
+        value: "20"
+      - key: TRUST_PROXY
+        value: "1"
