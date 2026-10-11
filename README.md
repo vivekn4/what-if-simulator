@@ -1,5 +1,8 @@
 # 🔮 What If — Life Simulator
 
+## Screenshot
+
+![Screenshot](assets/screenshot.png)
 ![What If banner](assets/banner.jpg)
 
 ![Made by VN](https://img.shields.io/badge/made%20by-VN-blue)
