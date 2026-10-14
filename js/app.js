@@ -10,6 +10,9 @@
 import { escapeHtml, parseChapters } from "./story.js";
 import { Sfx } from "./sfx.js";
 import { Vfx } from "./vfx.js";
+import { generateOfflineTimeline, generateOfflineBranch, offlineSeedFor } from "./offline.js";
+import { Achievements } from "./achievements.js";
+import { serializeTimeline, parseTimelineExport, buildShareCard } from "./share.js";
 
   const API_URL =
     (window.WHATIF_CONFIG && window.WHATIF_CONFIG.API_URL) || "/api/chat";
@@ -50,14 +53,24 @@ import { Vfx } from "./vfx.js";
   const timelineLoading = $("timeline-loading");
   const timelineError = $("timeline-error");
   const copyBtn = $("copy-btn");
+  const shareBtn = $("share-btn");
+  const exportBtn = $("export-btn");
+  const importBtn = $("import-btn");
+  const importFile = $("import-file");
+  const extendBtn = $("extend-btn");
+  const rerollBtn = $("reroll-btn");
   const saveBtn = $("save-btn");
   const startoverBtn = $("startover-btn");
+  const offlineBtn = $("offline-btn");
+  const offlineRetryBtn = $("offline-retry-btn");
+  const achievementsList = $("achievements-list");
   const toast = $("toast");
   const sfxToggle = $("sfx-toggle");
 
   /* ---------------- state ---------------- */
 
-  // { scenario, years, tone, chapters: [{ year, text, branches: [text] }] }
+  // { scenario, years, tone, chapters: [{ year, text, branches: [text] }],
+  //   offline: bool, offlineSeed: string|null, offlineSalt: number }
   let state = null;
   let generating = false;
 
@@ -99,6 +112,43 @@ import { Vfx } from "./vfx.js";
     const landing = name === "landing";
     viewLanding.hidden = !landing;
     viewTimeline.hidden = landing;
+  }
+
+  /* ---------------- achievements ---------------- */
+
+  function announceUnlocks(defs) {
+    if (!defs || !defs.length) return;
+    for (const d of defs) {
+      showToast(`${d.icon} Achievement unlocked: ${d.title} — ${d.desc}`);
+    }
+    Sfx.fanfare();
+    Vfx.confetti(window.innerWidth / 2, 140);
+    renderAchievements();
+  }
+
+  function renderAchievements() {
+    if (!achievementsList) return;
+    const unlocked = Achievements.unlockedDefs();
+    achievementsList.innerHTML = "";
+    if (!unlocked.length) {
+      const li = document.createElement("li");
+      li.className = "achievement-item muted";
+      li.textContent = "No achievements yet — generate a timeline to start.";
+      achievementsList.appendChild(li);
+      return;
+    }
+    for (const d of unlocked) {
+      const li = document.createElement("li");
+      li.className = "achievement-item";
+      const icon = document.createElement("span");
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = d.icon;
+      const text = document.createElement("span");
+      text.textContent = `${d.title} — ${d.desc}`;
+      li.appendChild(icon);
+      li.appendChild(text);
+      achievementsList.appendChild(li);
+    }
   }
 
   /* ---------------- AI prompts ---------------- */
@@ -144,6 +194,31 @@ import { Vfx } from "./vfx.js";
     );
   }
 
+  function buildContinuePrompt(scenario, tone, priorChapters, fromYear, toYear) {
+    const toneDesc = TONES[tone] || TONES.realistic;
+    const soFar = priorChapters
+      .map((c) => `YEAR ${c.year}:\n${c.text}`)
+      .join("\n\n");
+    const count = toYear - fromYear;
+    return (
+      'The life story so far — "What if I ' +
+      scenario +
+      '?" (' +
+      toneDesc +
+      ").\n\n" +
+      soFar +
+      "\n\n" +
+      "Continue the story from there. Write exactly " +
+      count +
+      " chapter(s), one per year, for YEARS " +
+      (fromYear + 1) +
+      " through " +
+      toYear +
+      ", following your format contract. " +
+      "Keep continuity with the story so far: same people, places, and consequences."
+    );
+  }
+
   async function callChat(messages) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CLIENT_TIMEOUT_MS);
@@ -177,9 +252,77 @@ import { Vfx } from "./vfx.js";
     }
   }
 
+  /**
+   * Streaming chat: consumes the server-sent-events endpoint, calling
+   * onDelta(delta, full) as chunks arrive, and resolves with the full reply.
+   * Throws on non-SSE responses (caller falls back to callChat) or on an
+   * error event from the server.
+   */
+  async function callChatStream(messages, onDelta) {
+    const res = await fetch(API_URL + "/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("text/event-stream")) {
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        /* fall through */
+      }
+      throw new Error(data.error || "Streaming unavailable (HTTP " + res.status + ").");
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const event = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        for (const line of event.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          let payload;
+          try {
+            payload = JSON.parse(trimmed.slice(5).trim());
+          } catch {
+            continue;
+          }
+          if (payload.error) throw new Error(payload.error);
+          if (payload.delta) {
+            full += payload.delta;
+            if (onDelta) onDelta(payload.delta, full);
+          }
+          if (payload.done) return full;
+        }
+      }
+    }
+    if (!full.trim()) throw new Error("The storyteller returned an empty reply. Please try again.");
+    return full;
+  }
+
+  /**
+   * Prefer streaming (progressive reveal); fall back to the one-shot
+   * endpoint when streaming is unavailable. Returns the full reply.
+   */
+  async function generateWithStreamOrFallback(messages, onDelta) {
+    try {
+      return await callChatStream(messages, onDelta);
+    } catch {
+      return await callChat(messages);
+    }
+  }
+
   /* ---------------- timeline rendering ---------------- */
 
-  function buildChapterCard(chapter, idx) {
+  function buildChapterCard(chapter, idx, interactive = true) {
     const article = document.createElement("article");
     article.className = "chapter";
 
@@ -200,24 +343,28 @@ import { Vfx } from "./vfx.js";
 
     const branchList = document.createElement("div");
     branchList.className = "branch-list";
-    chapter.branches.forEach((branchText) => {
-      branchList.appendChild(buildBranchCard(branchText));
+    chapter.branches.forEach((branchText, bIdx) => {
+      branchList.appendChild(
+        buildBranchCard(branchText, interactive ? () => handleContinueFromBranch(idx, bIdx) : null)
+      );
     });
     body.appendChild(branchList);
 
-    const branchBtn = document.createElement("button");
-    branchBtn.type = "button";
-    branchBtn.className = "branch-btn";
-    branchBtn.textContent = "↳ explore an alternative";
-    branchBtn.addEventListener("click", () => handleBranch(idx, branchBtn, branchList));
-    body.appendChild(branchBtn);
+    if (interactive) {
+      const branchBtn = document.createElement("button");
+      branchBtn.type = "button";
+      branchBtn.className = "branch-btn";
+      branchBtn.textContent = "↳ explore an alternative";
+      branchBtn.addEventListener("click", () => handleBranch(idx, branchBtn, branchList));
+      body.appendChild(branchBtn);
+    }
 
     article.appendChild(marker);
     article.appendChild(body);
     return article;
   }
 
-  function buildBranchCard(branchText) {
+  function buildBranchCard(branchText, onContinue) {
     const card = document.createElement("div");
     card.className = "branch-card";
 
@@ -231,16 +378,33 @@ import { Vfx } from "./vfx.js";
 
     card.appendChild(label);
     card.appendChild(text);
+    if (onContinue) {
+      const contBtn = document.createElement("button");
+      contBtn.type = "button";
+      contBtn.className = "branch-continue-btn";
+      contBtn.textContent = "▶ continue the story from here";
+      contBtn.addEventListener("click", onContinue);
+      card.appendChild(contBtn);
+    }
     return card;
   }
 
-  function renderTimeline() {
+  function renderTimeline(interactive = true) {
     timelineEl.innerHTML = "";
+    if (state && state.offline) {
+      const badge = document.createElement("p");
+      badge.className = "offline-badge";
+      badge.textContent =
+        "📴 Offline demo — written locally from story beats, not by AI. Seed: " +
+        (state.offlineSeed || "demo");
+      timelineEl.appendChild(badge);
+    }
     state.chapters.forEach((chapter, idx) => {
-      const card = buildChapterCard(chapter, idx);
+      const card = buildChapterCard(chapter, idx, interactive);
       card.style.animationDelay = Math.min(idx * 70, 700) + "ms";
       timelineEl.appendChild(card);
     });
+    if (rerollBtn) rerollBtn.hidden = !(state && state.offline);
   }
 
   async function handleBranch(idx, btn, branchList) {
@@ -259,19 +423,34 @@ import { Vfx } from "./vfx.js";
     branchList.appendChild(loadingCard);
 
     try {
-      const reply = await callChat([
-        {
-          role: "user",
-          content: buildBranchPrompt(state.scenario, state.tone, chapter.year, chapter.text),
-        },
-      ]);
-      const parsed = parseChapters(reply, chapter.year);
-      const alt = parsed.length ? parsed[0].text : reply.trim();
+      let alt;
+      if (state.offline) {
+        // Offline demo: compose the alternative locally, no network.
+        alt = generateOfflineBranch({
+          scenario: state.scenario,
+          tone: state.tone,
+          year: chapter.year,
+          years: state.years,
+          chapterText: chapter.text,
+          seed: (state.offlineSalt || 0) + chapter.branches.length + 1,
+        });
+      } else {
+        const reply = await callChat([
+          {
+            role: "user",
+            content: buildBranchPrompt(state.scenario, state.tone, chapter.year, chapter.text),
+          },
+        ]);
+        const parsed = parseChapters(reply, chapter.year);
+        alt = parsed.length ? parsed[0].text : reply.trim();
+      }
       if (!alt) throw new Error("The storyteller returned an empty reply. Please try again.");
       chapter.branches.push(alt);
       loadingCard.remove();
-      const newCard = buildBranchCard(alt);
+      const newBranchIdx = chapter.branches.length - 1;
+      const newCard = buildBranchCard(alt, () => handleContinueFromBranch(idx, newBranchIdx));
       branchList.appendChild(newCard);
+      announceUnlocks(Achievements.record("branches"));
       Sfx.successChime();
       const r = btn.getBoundingClientRect();
       Vfx.sparkle(r.left + r.width / 2, r.top);
@@ -283,6 +462,181 @@ import { Vfx } from "./vfx.js";
       btn.disabled = false;
       btn.textContent = originalLabel;
     }
+  }
+
+  /**
+   * Time-travel: promote a branch to canon for its year, drop the other
+   * alternates for that year, and rewrite every later year so the story
+   * continues from the new path. Offline timelines regenerate locally.
+   */
+  async function handleContinueFromBranch(idx, branchIdx) {
+    if (generating) return;
+    const chapter = state.chapters[idx];
+    const alt = chapter.branches[branchIdx];
+    if (!alt) return;
+    if (idx === state.chapters.length - 1) {
+      // Last chapter: nothing after it to rewrite — just promote it.
+      chapter.text = alt;
+      chapter.branches = [];
+      renderTimeline();
+      announceUnlocks(Achievements.record("continues"));
+      Sfx.successChime();
+      showToast("That alternative is now the story.");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Continue from this alternative? Year " +
+          chapter.year +
+          " will become the main story and every later year will be rewritten."
+      )
+    ) {
+      return;
+    }
+    generating = true;
+    Sfx.whoosh();
+    timelineLoading.hidden = false;
+    try {
+      const newChapters = state.chapters.slice(0, idx + 1).map((c) => ({
+        year: c.year,
+        text: c.text,
+        branches: c.branches ? c.branches.slice() : [],
+      }));
+      newChapters[idx].text = alt;
+      newChapters[idx].branches = [];
+      const fromYear = chapter.year;
+      const toYear = state.years;
+      let fresh;
+      if (state.offline) {
+        fresh = generateOfflineTimeline({
+          scenario: state.scenario,
+          years: toYear,
+          tone: state.tone,
+          seed: `continue-${state.offlineSalt || 0}-${fromYear}`,
+        })
+          .filter((c) => c.year > fromYear)
+          .map((c) => ({ year: c.year, text: c.text, branches: [] }));
+      } else {
+        const reply = await generateWithStreamOrFallback([
+          {
+            role: "user",
+            content: buildContinuePrompt(state.scenario, state.tone, newChapters, fromYear, toYear),
+          },
+        ]);
+        fresh = parseChapters(reply, toYear - fromYear).map((c) => ({
+          year: c.year,
+          text: c.text,
+          branches: [],
+        }));
+        // The model returns years 1..N for the continuation; relabel to real years.
+        fresh.forEach((c, i) => {
+          c.year = fromYear + 1 + i;
+        });
+      }
+      if (!fresh.length) throw new Error("The storyteller returned an empty reply. Please try again.");
+      state.chapters = [...newChapters, ...fresh];
+      renderTimeline();
+      announceUnlocks(Achievements.record("continues"));
+      Sfx.successChime();
+      Vfx.confetti(window.innerWidth / 2, 160);
+      showToast("Timeline rewritten from Year " + fromYear + ".");
+    } catch (err) {
+      Sfx.errorBuzz();
+      showToast(err.message || "Could not continue from that branch.", "error");
+    } finally {
+      timelineLoading.hidden = true;
+      generating = false;
+    }
+  }
+
+  /** Extend the timeline by 5 more years from where it ends. */
+  async function handleExtend() {
+    if (generating || !state || !state.chapters.length) return;
+    if (state.years >= 30) {
+      showToast("30 years is the longest timeline — time to start a new what-if.", "error");
+      return;
+    }
+    generating = true;
+    Sfx.whoosh();
+    timelineLoading.hidden = false;
+    const fromYear = state.years;
+    const toYear = Math.min(30, fromYear + 5);
+    try {
+      let fresh;
+      if (state.offline) {
+        fresh = generateOfflineTimeline({
+          scenario: state.scenario,
+          years: toYear,
+          tone: state.tone,
+          seed: `extend-${state.offlineSalt || 0}-${fromYear}`,
+        })
+          .filter((c) => c.year > fromYear)
+          .map((c) => ({ year: c.year, text: c.text, branches: [] }));
+      } else {
+        const reply = await generateWithStreamOrFallback([
+          {
+            role: "user",
+            content: buildContinuePrompt(state.scenario, state.tone, state.chapters, fromYear, toYear),
+          },
+        ]);
+        fresh = parseChapters(reply, toYear - fromYear).map((c) => ({
+          year: c.year,
+          text: c.text,
+          branches: [],
+        }));
+        fresh.forEach((c, i) => {
+          c.year = fromYear + 1 + i;
+        });
+      }
+      if (!fresh.length) throw new Error("The storyteller returned an empty reply. Please try again.");
+      state.chapters = [...state.chapters, ...fresh];
+      state.years = toYear;
+      timelineSubtitle.textContent =
+        "A " + toYear + "-year " + TONE_LABELS[state.tone].toLowerCase() + " timeline · written by The Chronicler";
+      renderTimeline();
+      announceUnlocks(Achievements.record("extends"));
+      Sfx.successChime();
+      Vfx.confetti(window.innerWidth / 2, 160);
+      showToast("Extended to " + toYear + " years.");
+    } catch (err) {
+      Sfx.errorBuzz();
+      showToast(err.message || "Could not extend the timeline.", "error");
+    } finally {
+      timelineLoading.hidden = true;
+      generating = false;
+    }
+  }
+
+  /** Build an offline demo timeline from the current form values. */
+  function handleOfflineDemo() {
+    const scenario = scenarioInput.value.trim();
+    if (!scenario) {
+      Sfx.errorBuzz();
+      showError(formError, "Tell me your what-if first — even a few words will do.");
+      scenarioInput.focus();
+      return;
+    }
+    const years = parseInt(yearsSelect.value, 10) || 10;
+    const tone = toneSelect.value in TONES ? toneSelect.value : "realistic";
+    const salt = (state && state.offline ? state.offlineSalt || 0 : 0) + 1;
+    const seed = offlineSeedFor({ scenario, tone, years, salt });
+    const chapters = generateOfflineTimeline({ scenario, years, tone, seed: salt }).map((c) => ({
+      year: c.year,
+      text: c.text,
+      branches: [],
+    }));
+    state = { scenario, years, tone, chapters, offline: true, offlineSeed: seed, offlineSalt: salt };
+    timelineTitle.textContent = "What if I " + scenario + "?";
+    timelineSubtitle.textContent =
+      "A " + years + "-year " + TONE_LABELS[tone].toLowerCase() + " timeline · offline demo";
+    hideError(timelineError);
+    showView("timeline");
+    timelineLoading.hidden = true;
+    renderTimeline();
+    announceUnlocks(Achievements.record("offlineDemos"));
+    Sfx.successChime();
+    Vfx.confetti(window.innerWidth / 2, 160);
+    window.scrollTo({ top: 0 });
   }
 
   /* ---------------- generate flow ---------------- */
@@ -305,20 +659,40 @@ import { Vfx } from "./vfx.js";
     generating = true;
     setGeneratingUI(true);
     Sfx.whoosh();
-    state = { scenario, years, tone, chapters: [] };
+    state = { scenario, years, tone, chapters: [], offline: false, offlineSeed: null, offlineSalt: 0 };
 
     timelineTitle.textContent = "What if I " + scenario + "?";
     timelineSubtitle.textContent =
       "A " + years + "-year " + TONE_LABELS[tone].toLowerCase() + " timeline · written by The Chronicler";
     timelineEl.innerHTML = "";
     hideError(timelineError);
+    if (offlineRetryBtn) offlineRetryBtn.hidden = true;
     showView("timeline");
     timelineLoading.hidden = false;
 
     try {
-      const reply = await callChat([
-        { role: "user", content: buildTimelinePrompt(scenario, years, tone) },
-      ]);
+      // Streaming: chapters appear as the storyteller writes them.
+      let lastRender = 0;
+      const reply = await generateWithStreamOrFallback(
+        [{ role: "user", content: buildTimelinePrompt(scenario, years, tone) }],
+        (_delta, full) => {
+          const now = Date.now();
+          if (now - lastRender < 300) return;
+          lastRender = now;
+          const partial = parseChapters(full, years).map((c) => ({
+            year: c.year,
+            text: c.text,
+            branches: [],
+          }));
+          if (partial.length) {
+            state.chapters = partial;
+            renderTimeline(false);
+            const last = timelineEl.lastElementChild;
+            if (last) last.classList.add("chapter-streaming");
+            timelineLoading.hidden = true;
+          }
+        }
+      );
       const chapters = parseChapters(reply, years).map((c) => ({
         year: c.year,
         text: c.text,
@@ -329,12 +703,16 @@ import { Vfx } from "./vfx.js";
       }
       state.chapters = chapters;
       renderTimeline();
+      announceUnlocks(Achievements.record("timelines"));
+      if (years >= 10) announceUnlocks(Achievements.record("decadeTimelines"));
       Sfx.successChime();
       Vfx.confetti(window.innerWidth / 2, 160);
       timelineEl.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) {
       Sfx.errorBuzz();
       showError(timelineError, err.message || "Something went wrong. Please try again.");
+      // The AI is unavailable (often: no key configured) — offer the demo.
+      if (offlineRetryBtn) offlineRetryBtn.hidden = false;
     } finally {
       // Loading state can never get stuck: this finally always runs.
       timelineLoading.hidden = true;
@@ -349,7 +727,8 @@ import { Vfx } from "./vfx.js";
     const out = [];
     out.push("What if I " + state.scenario + "?");
     out.push(
-      "A " + state.years + "-year " + TONE_LABELS[state.tone].toLowerCase() + " timeline."
+      "A " + state.years + "-year " + TONE_LABELS[state.tone].toLowerCase() + " timeline." +
+        (state.offline ? " (Offline demo.)" : "")
     );
     out.push("");
     state.chapters.forEach((c) => {
@@ -430,6 +809,8 @@ import { Vfx } from "./vfx.js";
       scenario: state.scenario,
       years: state.years,
       tone: state.tone,
+      offline: Boolean(state.offline),
+      offlineSeed: state.offlineSeed || null,
       createdAt: new Date().toISOString(),
       chapters: state.chapters.map((c) => ({
         year: c.year,
@@ -439,10 +820,83 @@ import { Vfx } from "./vfx.js";
     });
     if (persistSaved(saved.slice(0, MAX_SAVED))) {
       renderSavedList();
+      announceUnlocks(Achievements.record("saves"));
       Sfx.successChime();
       const r = saveBtn.getBoundingClientRect();
       Vfx.sparkle(r.left + r.width / 2, r.top);
       showToast("Timeline saved.");
+    }
+  }
+
+  /* ---------------- export / import / share ---------------- */
+
+  function downloadJson(filename, obj) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  function handleExport() {
+    if (!state || !state.chapters.length) {
+      showToast("Generate a timeline first.", "error");
+      return;
+    }
+    const slug = state.scenario.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "timeline";
+    downloadJson(`what-if-${slug}.json`, serializeTimeline(state));
+    announceUnlocks(Achievements.record("exports"));
+    Sfx.successChime();
+    showToast("Timeline exported as JSON.");
+  }
+
+  async function handleImportFile(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error("That file is not valid JSON.");
+      }
+      const imported = parseTimelineExport(parsed);
+      state = imported;
+      timelineTitle.textContent = "What if I " + state.scenario + "?";
+      timelineSubtitle.textContent =
+        "A " + state.years + "-year " + TONE_LABELS[state.tone].toLowerCase() + " timeline" +
+        (state.offline ? " · offline demo" : " · written by The Chronicler");
+      yearsSelect.value = String(Math.min(10, Math.max(1, state.years)));
+      toneSelect.value = state.tone;
+      hideError(timelineError);
+      showView("timeline");
+      renderTimeline();
+      Sfx.successChime();
+      showToast("Timeline imported.");
+      window.scrollTo({ top: 0 });
+    } catch (err) {
+      Sfx.errorBuzz();
+      showToast(err.message || "Could not import that file.", "error");
+    }
+  }
+
+  async function handleShareCopy() {
+    if (!state || !state.chapters.length) {
+      showToast("Generate a timeline first.", "error");
+      return;
+    }
+    const card = buildShareCard(state);
+    try {
+      await navigator.clipboard.writeText(card);
+      announceUnlocks(Achievements.record("shareCopies"));
+      Sfx.successChime();
+      showToast("Share card copied to clipboard.");
+    } catch {
+      showToast("Copy is not available in this browser.", "error");
     }
   }
 
@@ -509,6 +963,9 @@ import { Vfx } from "./vfx.js";
         text: c.text,
         branches: Array.isArray(c.branches) ? c.branches.slice() : [],
       })),
+      offline: Boolean(entry.offline),
+      offlineSeed: entry.offlineSeed || null,
+      offlineSalt: 0,
     };
     timelineTitle.textContent = entry.title;
     timelineSubtitle.textContent =
@@ -580,8 +1037,24 @@ import { Vfx } from "./vfx.js";
 
   generateForm.addEventListener("submit", handleGenerate);
   copyBtn.addEventListener("click", handleCopy);
+  if (shareBtn) shareBtn.addEventListener("click", handleShareCopy);
+  if (exportBtn) exportBtn.addEventListener("click", handleExport);
+  if (importBtn && importFile) {
+    importBtn.addEventListener("click", () => importFile.click());
+    importFile.addEventListener("change", () => {
+      handleImportFile(importFile.files && importFile.files[0]);
+      importFile.value = "";
+    });
+  }
+  if (extendBtn) extendBtn.addEventListener("click", handleExtend);
+  if (rerollBtn) rerollBtn.addEventListener("click", handleOfflineDemo);
   saveBtn.addEventListener("click", handleSave);
   startoverBtn.addEventListener("click", handleStartOver);
+  if (offlineBtn) offlineBtn.addEventListener("click", handleOfflineDemo);
+  if (offlineRetryBtn) offlineRetryBtn.addEventListener("click", handleOfflineDemo);
+
+  renderSavedList();
+  renderAchievements();
 
   document.querySelectorAll("#example-chips button").forEach((chip) => {
     chip.addEventListener("click", () => {
