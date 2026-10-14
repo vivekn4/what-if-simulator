@@ -78,7 +78,13 @@
           <span id="generate-btn-label">Generate my timeline</span>
         </button>
         <p class="fineprint">A work of fiction, spun from your prompt. The future is unwritten.</p>
+        <p class="fineprint">No AI key on this server? <button id="offline-btn" type="button" class="link-btn">Try an offline demo</button> — a locally written sample timeline.</p>
       </form>
+
+      <section class="saved-section" aria-labelledby="achievements-heading">
+        <h2 id="achievements-heading">🏆 Achievements</h2>
+        <ul id="achievements-list" class="achievements-list"></ul>
+      </section>
 
       <section class="saved-section" aria-labelledby="saved-heading">
         <h2 id="saved-heading">Saved timelines</h2>
@@ -96,12 +102,19 @@
         </div>
         <div class="toolbar-actions">
           <button id="copy-btn" type="button" class="btn-ghost">Copy timeline</button>
+          <button id="share-btn" type="button" class="btn-ghost">Copy share card</button>
+          <button id="export-btn" type="button" class="btn-ghost">Export JSON</button>
+          <button id="import-btn" type="button" class="btn-ghost">Import JSON</button>
+          <input id="import-file" type="file" accept=".json,application/json" hidden>
+          <button id="extend-btn" type="button" class="btn-ghost">＋ Extend 5 years</button>
+          <button id="reroll-btn" type="button" class="btn-ghost" hidden>↻ Re-roll demo</button>
           <button id="save-btn" type="button" class="btn-ghost">Save timeline</button>
           <button id="startover-btn" type="button" class="btn-ghost btn-danger">Start over</button>
         </div>
       </div>
 
       <p id="timeline-error" class="error" hidden></p>
+      <p><button id="offline-retry-btn" type="button" class="btn-ghost" hidden>📴 Try the offline demo instead</button></p>
 
       <div id="timeline-loading" class="loading" hidden aria-live="polite">
         <div class="loading-orb" aria-hidden="true">🔮</div>

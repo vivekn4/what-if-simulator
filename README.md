@@ -14,9 +14,16 @@ Type any life decision — *"What if I quit my job to travel the world?"* — an
 ## ✨ Features
 
 - **Year-by-year timelines** — pick 1, 5, or 10 years; The Chronicler (AI storyteller) writes one vivid chapter per year
+- **Streaming generation** — chapters appear as the storyteller writes them (`POST /api/chat/stream`, SSE), with automatic fallback to the one-shot endpoint
+- **Offline demo mode** — no AI key? "Try the offline demo" composes a seeded sample timeline locally from story beats (clearly labeled, never pretending to be AI), with re-roll, branches, continue, and extend all working offline
 - **Three tones** — Realistic, Optimistic, or Darkly comic
 - **Branching alternatives** — rewrite any chapter to explore a different path; add as many branches as you like
+- **Continue from a branch** — promote any alternative to canon and rewrite every later year from that new path (time travel)
+- **Extend the story** — add 5 more years at a time, up to 30 total
+- **Achievements** — 8 milestones (First Timeline, Decade Dreamer, Branch Explorer, Time Traveler, …) with toast + fanfare + confetti
 - **Copy timeline** as plain text (clipboard with fallback)
+- **Share card** — copy a short teaser text for chats/posts
+- **Export / import** — download a versioned JSON file of any timeline and import it back (validated)
 - **Save timelines** to your browser (localStorage) — reopen or delete them anytime
 - **Warm editorial design** — serif storytelling aesthetic, mobile-responsive, reduced-motion friendly
 - **Synthesized SFX** — zero-asset WebAudio sound engine: whooshes on generation, chimes on timeline completion, branch and save jingles (mutable, persisted)
@@ -87,6 +94,14 @@ curl -X POST http://localhost:3000/api/chat \
 
 Response: `{"reply": "YEAR 1:\n..."}`. Errors are always JSON: `{"error": "..."}`.
 
+### `POST /api/chat/stream`
+
+Same body as `/api/chat`, but the response is a server-sent-events stream:
+`data: {"delta": "..."}` chunks followed by `data: {"done": true}` (or
+`data: {"error": "..."}`). If streaming is unavailable, the client falls
+back to `/api/chat`. No retries on the stream — a retry would duplicate
+already-rendered output.
+
 ## 🧠 How the story contract works
 
 The backend's system prompt forces a strict, parseable format:
@@ -100,13 +115,19 @@ The frontend (`js/story.js`) parses on those markers, and falls back gracefully:
 
 ```
 what-if-simulator/
-├── server.js          # Express API: /api/chat proxy + static frontend hosting
+├── server.js          # Express API: /api/chat + /api/chat/stream (SSE) + static frontend hosting
 ├── index.html         # App shell (landing + timeline views)
 ├── css/style.css      # Warm editorial styling, responsive
 ├── js/
 │   ├── config.js      # Runtime API_URL config (default: same-origin /api/chat)
 │   ├── story.js       # Pure chapter parser + HTML escaper (unit-testable, no DOM)
-│   └── app.js         # UI logic: generate, branch, copy, save, load
+│   ├── rng.js         # Seeded PRNG for deterministic offline demos
+│   ├── offline.js     # "Chronicler-lite": seeded local demo timeline composer
+│   ├── achievements.js# Milestone defs + localStorage stats
+│   ├── share.js       # Export/import validation + share-card text
+│   └── app.js         # UI logic: generate (streaming), branch, continue, extend, copy, share, export/import, save, load
+├── test/              # node:test suite (npm test)
+├── PLAN.md            # Living plan + teardown sources + deliberately-not-built list
 ├── package.json
 ├── .env.example       # All config knobs, documented
 ├── render.yaml        # One-click Render deploy

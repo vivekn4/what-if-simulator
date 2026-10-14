@@ -15,9 +15,10 @@
   "name": "what-if-simulator",
   "scripts": {
     "dev": "node --watch server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "WHATIF_NO_LISTEN=1 node --test test/*.test.mjs"
   },
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Vivek Nair (VN)"
 }

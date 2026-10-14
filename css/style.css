@@ -638,3 +638,62 @@ main.wrap { position: relative; z-index: 1; }
     transition: none !important;
   }
 }
+
+/* --- v1.1 additions (streaming, branches, offline, achievements) --- */
+
+/* Blinking cursor on the chapter still being streamed in. */
+.chapter-streaming .chapter-text::after {
+  content: "▍";
+  margin-left: 2px;
+  color: var(--accent);
+  animation: cursorBlink 0.9s steps(1) infinite;
+}
+@keyframes cursorBlink {
+  50% { opacity: 0; }
+}
+
+/* Continue-from-branch button inside a branch card. */
+.branch-continue-btn {
+  margin-top: 10px;
+  background: none;
+  border: 1px solid var(--gold);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.branch-continue-btn:hover {
+  background: rgba(201, 162, 39, 0.15);
+}
+
+/* Offline demo badge above the timeline. */
+.offline-badge {
+  background: rgba(201, 162, 39, 0.12);
+  border: 1px dashed var(--gold);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  font-size: 0.9rem;
+}
+
+/* Achievements shelf on the landing view. */
+.achievements-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.achievement-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  background: rgba(201, 162, 39, 0.1);
+  border: 1px solid rgba(201, 162, 39, 0.35);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.88rem;
+}
