@@ -44,7 +44,7 @@ const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 120;
 const TRUST_PROXY = process.env.TRUST_PROXY ?? "1"; // set "1" on Render/Heroku-style hosts
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 /* ------------------------------------------------------------------ */
 /* Structured logger (JSON lines; never logs message contents or keys) */
@@ -158,6 +158,23 @@ async function callOpenAICompatible(messages) {
     throw new UpstreamError("AI endpoint returned an empty reply.", 502);
   }
   return text;
+}
+
+/**
+ * Pull the incremental text out of one parsed upstream SSE chunk.
+ * Handles both delta streaming (`choices[0].delta.content`) and a
+ * full-message chunk (`choices[0].message.content`). Returns "" when
+ * the chunk carries no text (e.g. role-only or finish-reason chunks).
+ * Pure function — unit-tested.
+ */
+function extractChatDelta(chunk) {
+  const choice = chunk?.choices?.[0];
+  if (!choice) return "";
+  const delta = choice?.delta?.content;
+  if (typeof delta === "string") return delta;
+  const message = choice?.message?.content;
+  if (typeof message === "string") return message;
+  return "";
 }
 
 /**
@@ -341,6 +358,111 @@ app.post("/api/chat", chatLimiter, async (req, res) => {
   }
 });
 
+app.post("/api/chat/stream", chatLimiter, async (req, res) => {
+  const problem = validateChatBody(req.body);
+  if (problem) {
+    return res.status(400).json({ error: problem });
+  }
+  if (!AI_API_KEY) {
+    return res.status(500).json({
+      error: "This server has no AI API key configured. The owner needs to set AI_API_KEY.",
+    });
+  }
+
+  // Streaming: no retries — a retry would duplicate the partial output
+  // the client already rendered. The client falls back to /api/chat.
+  let upstream;
+  try {
+    upstream = await fetchWithTimeout(
+      chatCompletionsUrl(AI_BASE_URL),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${AI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: AI_MODEL,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            ...normalizeMessages(req.body.messages),
+          ],
+          temperature: AI_TEMPERATURE,
+          max_tokens: AI_MAX_TOKENS,
+          stream: true,
+        }),
+      },
+      AI_TIMEOUT_MS
+    );
+  } catch (err) {
+    log("error", { event: "chat_stream_failed", reqId: req.id, error: err?.message });
+    return res.status(err instanceof UpstreamError ? err.status : 502).json({
+      error: "Something went wrong asking the storyteller. Please try again in a moment.",
+    });
+  }
+
+  if (!upstream.ok) {
+    let detail = `HTTP ${upstream.status}`;
+    try {
+      const data = await upstream.json();
+      detail = data?.error?.message || data?.error || detail;
+    } catch {
+      /* non-JSON upstream error */
+    }
+    const busy = upstream.status === 429 || upstream.status === 402;
+    return res.status(upstream.status >= 500 ? 502 : upstream.status).json({
+      error: busy
+        ? "The storyteller is busy right now — please wait a moment and try again."
+        : `AI endpoint error: ${String(detail).slice(0, 300)}`,
+    });
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const send = (obj) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+
+  try {
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") {
+          send({ done: true });
+          res.end();
+          return;
+        }
+        try {
+          const delta = extractChatDelta(JSON.parse(payload));
+          if (delta) send({ delta });
+        } catch {
+          /* skip one malformed chunk — the stream continues */
+        }
+      }
+    }
+    send({ done: true });
+    res.end();
+  } catch (err) {
+    log("error", { event: "chat_stream_failed", reqId: req.id, error: err?.message });
+    send({ error: "The story stream broke off. Please try again." });
+    res.end();
+  }
+});
+
 // 404 for anything else.
 app.use((_req, res) => res.status(404).json({ error: "Not found" }));
 
@@ -402,4 +524,4 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 export default app;
 
 // Named exports for unit testing (import with WHATIF_NO_LISTEN=1).
-export { validateChatBody, normalizeMessages, chatCompletionsUrl };
+export { validateChatBody, normalizeMessages, chatCompletionsUrl, extractChatDelta };
